@@ -173,12 +173,14 @@ export default function DashboardScreen() {
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.logo}>THE SHORTLIST</Text>
-          <TouchableOpacity
-            onPress={() => router.push("/profile")}
-            style={styles.avatar}
-          >
-            <Text style={styles.avatarText}>{data.initials}</Text>
-          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push("/(tabs)/profile")}
+  style={{ position: "absolute", top: 8, right: 20, zIndex: 10,
+    width: 36, height: 36, borderRadius: 18, backgroundColor: "#1a1a1a",
+    alignItems: "center", justifyContent: "center" }}>
+  <Text style={{ fontSize: 13, fontWeight: "500", color: "#ffffff" }}>
+    {data.displayName ? data.displayName.slice(0, 2).toUpperCase() : "ME"}
+  </Text>
+</TouchableOpacity>
         </View>
 
         {/* Greeting */}
