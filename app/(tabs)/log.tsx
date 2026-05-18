@@ -8,6 +8,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Audio } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../../lib/supabase";
+import * as FileSystem from "expo-file-system/legacy";
 
 // ── Colors ────────────────────────────────────────────────────
 const C = {
@@ -19,16 +20,19 @@ const C = {
 };
 
 // ── Types ─────────────────────────────────────────────────────
-type FeelType = "good" | "ok" | "off" | null;
+type FeelType = "amazing" | "good" | "ok" | "off" | "totally_off" | null;
 type WeatherType = "warm" | "cool" | "rainy" | "cold" | null;
 type MicState = "idle" | "recording" | "complete";
 
-const OCCASIONS = ["Work", "Casual", "Dinner", "Weekend", "Travel", "Event"];
-const FEELS: { id: "good" | "ok" | "off"; symbol: string; label: string }[] = [
-  { id: "good", symbol: "✦", label: "Felt good" },
-  { id: "ok",   symbol: "—", label: "Felt ok" },
-  { id: "off",  symbol: "○", label: "Felt off" },
+const OCCASIONS = ["Casual", "Work", "Date", "Event", "Travel", "Dinner", "Active", "Social"];
+const FEELS: { id: NonNullable<FeelType>; symbol: string; label: string }[] = [
+  { id: "amazing",    symbol: "★", label: "Amazing" },
+  { id: "good",       symbol: "✦", label: "Good" },
+  { id: "ok",         symbol: "—", label: "Ok" },
+  { id: "off",        symbol: "○", label: "Off" },
+  { id: "totally_off", symbol: "✕", label: "Totally off" },
 ];
+
 const WEATHERS: { id: NonNullable<WeatherType>; emoji: string; label: string }[] = [
   { id: "warm",  emoji: "☀️",  label: "Warm" },
   { id: "cool",  emoji: "🌥",  label: "Cool" },
@@ -37,11 +41,13 @@ const WEATHERS: { id: NonNullable<WeatherType>; emoji: string; label: string }[]
 ];
 
 // ── Feel style helper ─────────────────────────────────────────
-function feelColors(id: "good" | "ok" | "off", selected: boolean) {
+function feelColors(id: NonNullable<FeelType>, selected: boolean) {
   if (!selected) return { bg: C.white, border: C.light, color: C.brown };
+  if (id === "amazing") return { bg: "#e8f5e9", border: "#81c784", color: "#2e7d32" };
   if (id === "good") return { bg: C.mint, border: C.mintDeep, color: C.mintText };
-  if (id === "ok")   return { bg: C.light, border: C.mid, color: "#666" };
-  return { bg: C.offBg, border: C.offBorder, color: C.offText };
+  if (id === "ok") return { bg: C.light, border: C.mid, color: "#666" };
+  if (id === "off") return { bg: "#fff3e0", border: "#ffb74d", color: "#e65100" };
+  return { bg: "#f0e8e8", border: "#dcc", color: "#5c3a3a" };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -54,14 +60,11 @@ export default function LogScreen() {
   const [transcript, setTranscript] = useState("");
   const [feel, setFeel] = useState<FeelType>(null);
   const [occasions, setOccasions] = useState<string[]>([]);
-  const [weather, setWeather] = useState<WeatherType>(null);
   const [bodyContext, setBodyContext] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
-  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
-  const [closetItems, setClosetItems] = useState<{ id: string; name: string; category: string }[]>([]);
-  const [showAllItems, setShowAllItems] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const saveDisabled = transcript === "" || feel === null || photo === null || isSaving;
   const todayLabel = new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
@@ -74,30 +77,11 @@ useFocusEffect(
     setTranscript("");
     setFeel(null);
     setOccasions([]);
-    setWeather(null);
     setBodyContext("");
     setPhoto(null);
-    setSelectedItemIds([]);
-    setShowAllItems(false);
     setIsSaving(false);
   }, [])
 );
-
-  // Load closet items
-  useEffect(() => {
-    const loadCloset = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const { data } = await supabase
-        .from("closet_items")
-        .select("id, name, category")
-        .eq("user_id", session.user.id)
-        .eq("status", "active")
-        .order("name");
-      setClosetItems(data || []);
-    };
-    loadCloset();
-  }, []);
 
   // ── Voice Recording ─────────────────────────────────────────
   async function handleMicPress() {
@@ -176,68 +160,146 @@ useFocusEffect(
       mediaTypes: ["images"],
       allowsEditing: false,
       quality: 0.7,
+      exif: false,
     });
-    if (!result.canceled) setPhoto(result.assets[0].uri);
+    if (!result.canceled) {
+      // expo-image-picker on iOS may return HEIC — we need to check
+      const uri = result.assets[0].uri;
+      setPhoto(uri);
+    }
   }
 
-  // ── Save ────────────────────────────────────────────────────
-  async function handleSave() {
-    if (saveDisabled) return;
-    setIsSaving(true);
+  // ═══════════════════════════════════════════════════════════════
+// UPDATED handleSave for app/(tabs)/log.tsx
+// 
+// Replace the existing handleSave function with this version.
+// This uploads the outfit photo, saves the log with photo_url,
+// then triggers AI analysis in the background.
+// ═══════════════════════════════════════════════════════════════
 
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { Alert.alert("Error", "Not signed in."); setIsSaving(false); return; }
+async function handleSave() {
+  if (saveDisabled) return;
+  setIsSaving(true);
 
-    const feelMap = { good: 5, ok: 3, off: 1 };
-    const overallFeel = feel ? feelMap[feel] : null;
-    const todayDate = new Date().toISOString().split("T")[0];
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) { Alert.alert("Error", "Not signed in."); setIsSaving(false); return; }
 
-    const { data: outfitLog, error: logError } = await supabase
-      .from("outfit_logs")
-      .insert({
-        user_id: session.user.id,
-        worn_date: todayDate,
-        overall_feel: overallFeel,
-        sentiment_tags: occasions.slice(1),
-        occasion: occasions[0] || null,
-        weather: weather || null,
-        notes: transcript,
-        items: selectedItemIds,
-      })
-      .select()
-      .single();
+  const userId = session.user.id;
+  const feelMap: Record<string, number> = { amazing: 5, good: 4, ok: 3, off: 2, totally_off: 1 };
+  const overallFeel = feel ? feelMap[feel] : null;
+  const todayDate = new Date().toISOString().split("T")[0];
 
-    if (logError) { Alert.alert("Save failed", logError.message); setIsSaving(false); return; }
+// ── Step 1: Upload outfit photo (always as JPEG) ─────────────
+let photoUrl: string | null = null;
 
-    // Insert wear_logs for each selected item
-    if (selectedItemIds.length > 0) {
-      const wearLogs = selectedItemIds.map(itemId => ({
-        user_id: session.user.id,
-        closet_item_id: itemId,
-        outfit_log_id: outfitLog.id,
-        worn_date: todayDate,
-        feel: overallFeel,
-      }));
-      await supabase.from("wear_logs").insert(wearLogs);
+if (photo) {
+  try {
+    const fileName = `${userId}/${Date.now()}.jpg`;
+
+    // Read file as base64 using expo-file-system
+    const base64 = await FileSystem.readAsStringAsync(photo, {
+      encoding: "base64",
+    });
+
+    // Decode base64 to Uint8Array
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
     }
 
+    const { error: uploadError } = await supabase.storage
+      .from("outfit-photos")
+      .upload(fileName, bytes.buffer, { contentType: "image/jpeg" });
+
+    if (uploadError) {
+      console.error("Photo upload failed:", uploadError.message);
+    } else {
+      const { data: urlData } = supabase.storage
+        .from("outfit-photos")
+        .getPublicUrl(fileName);
+      photoUrl = urlData.publicUrl;
+    }
+  } catch (err) {
+    console.error("Photo upload error:", err);
+  }
+}
+
+  // ── Step 2: Save outfit log ──────────────────────────────────
+  const { data: outfitLog, error: logError } = await supabase
+    .from("outfit_logs")
+    .insert({
+      user_id: userId,
+      worn_date: todayDate,
+      overall_feel: overallFeel,
+      sentiment_tags: occasions.slice(1),
+      occasion: occasions[0] || null,
+      weather: null,
+      notes: transcript,
+      items: [],
+      photo_url: photoUrl,
+    })
+    .select()
+    .single();
+
+  if (logError) {
+    Alert.alert("Save failed", logError.message);
     setIsSaving(false);
-    // Navigate to confirmation
-    router.push({
-      pathname: "/(tabs)/log-confirmation",
-      params: {
-        wore: transcript,
-        feel: feel || "",
-        occasion: occasions[0] || "",
-        weather: weather || "",
-        date: todayLabel,
+    return;
+  }
+
+  // ── Step 3: Insert manual wear_logs (for manually selected items) ──
+
+  // ── Step 4: Trigger AI outfit analysis (background) ──────────
+  // This runs after navigation so the user isn't waiting
+  if (photoUrl) {
+    supabase.functions.invoke("analyze-outfit", {
+      body: {
+        photo_url: photoUrl,
+        outfit_log_id: outfitLog.id,
+        user_id: userId,
       },
+    }).then(({ data, error }) => {
+      if (error) {
+        console.error("Outfit analysis failed:", error.message);
+      } else {
+        console.log("Outfit analysis complete:", JSON.stringify(data));
+        // Trigger cropping for newly created items with bounding boxes
+        if (data?.items_needing_crop?.length > 0) {
+          for (const itemId of data.items_needing_crop) {
+            supabase.functions.invoke("crop-item-image", {
+              body: { item_id: itemId },
+            }).then(({ data: cropData, error: cropErr }) => {
+              if (cropErr) console.error(`Crop failed for ${itemId}:`, cropErr.message);
+              else console.log(`Crop complete for ${itemId}:`, cropData?.cropped_photo_url);
+            }).catch(err => console.error(`Crop error for ${itemId}:`, err));
+          }
+        }
+      }
+    }).catch(err => {
+      console.error("Outfit analysis error:", err);
     });
   }
 
-  function toggleOccasion(occ: string) {
-    setOccasions(prev => prev.includes(occ) ? prev.filter(o => o !== occ) : [...prev, occ]);
-  }
+  // ── Step 5: Navigate to confirmation ─────────────────────────
+  setIsSaving(false);
+  router.push({
+    pathname: "/(tabs)/log-confirmation",
+    params: {
+      wore: transcript,
+      feel: feel || "",
+      occasion: occasions[0] || "",
+      weather: "",
+      date: todayLabel,
+      outfit_log_id: outfitLog.id,
+      has_photo: photo ? "true" : "false",
+    },
+  });
+}
+  
+function toggleOccasion(occ: string) {
+  setOccasions(prev => prev.includes(occ) ? prev.filter(o => o !== occ) : [...prev, occ]);
+}
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -266,14 +328,17 @@ useFocusEffect(
       </View>
 
       {/* Scrollable content */}
-      <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 100 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
 
         {/* ── Voice or Type panel ── */}
         {mode === "voice" ? (
           <View style={s.section}>
             {micState === "idle" && (
-              <Text style={s.hintText}>Describe what you wore today — as if you're telling a friend.</Text>
+              <Text style={s.hintText}>Describe what you wore today, including brand and item, and tell us how you felt in it.</Text>
             )}
 
             {micState !== "complete" && (
@@ -326,50 +391,8 @@ useFocusEffect(
           </View>
         )}
 
-        {/* ── Photo Upload ── */}
-        <View style={s.section}>
-          <Text style={s.fieldLabel}>PHOTO</Text>
-          <TouchableOpacity onPress={pickPhoto} style={s.photoPicker}>
-            {photo ? (
-              <Image source={{ uri: photo }} style={{ width: "100%", height: "100%", borderRadius: 12 }} resizeMode="cover" />
-            ) : (
-              <Text style={{ fontSize: 11, color: C.brown }}>Tap to add photo</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* ── Item Picker ── */}
-        <View style={s.section}>
-          <Text style={s.fieldLabel}>ITEMS WORN ({selectedItemIds.length} SELECTED)</Text>
-          {closetItems.length === 0 ? (
-            <Text style={{ fontSize: 11, fontWeight: "300", color: C.brown, fontStyle: "italic" }}>
-              Add items to your closet first to track wear here.
-            </Text>
-          ) : (
-            <>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, maxHeight: showAllItems ? undefined : 120, overflow: "hidden" }}>
-                {closetItems.map(item => {
-                  const selected = selectedItemIds.includes(item.id);
-                  return (
-                    <TouchableOpacity key={item.id}
-                      onPress={() => setSelectedItemIds(prev => prev.includes(item.id) ? prev.filter(x => x !== item.id) : [...prev, item.id])}
-                      style={[s.chip, selected && s.chipActive]}>
-                      <Text style={[s.chipText, selected && s.chipTextActive]}>{item.name}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              {closetItems.length > 6 && (
-                <TouchableOpacity onPress={() => setShowAllItems(p => !p)}>
-                  <Text style={s.showMore}>{showAllItems ? "Show less" : "Show more"}</Text>
-                </TouchableOpacity>
-              )}
-            </>
-          )}
-        </View>
-
-        {/* ── Feel Selector ── */}
-        <View style={s.section}>
+    {/* ── Feel Selector ── */}
+    <View style={s.section}>
           <Text style={s.fieldLabel}>HOW DID YOU FEEL IN IT?</Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
             {FEELS.map(({ id, symbol, label }) => {
@@ -385,6 +408,21 @@ useFocusEffect(
             })}
           </View>
         </View>
+
+        {/* ── Photo Upload ── */}
+        <View style={s.section}>
+          <Text style={s.fieldLabel}>PHOTO</Text>
+          <TouchableOpacity onPress={pickPhoto} style={s.photoPicker}>
+            {photo ? (
+              <Image source={{ uri: photo }} style={{ width: "100%", height: "100%", borderRadius: 12 }} resizeMode="cover" />
+            ) : (
+              <Text style={{ fontSize: 11, color: C.brown }}>Tap to add photo</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Items Worn (text input) DELETED ── */}
+     
 
         {/* ── Occasion Chips ── */}
         <View style={s.section}>
@@ -402,22 +440,7 @@ useFocusEffect(
           </View>
         </View>
 
-        {/* ── Weather Chips ── */}
-        <View style={s.section}>
-          <Text style={s.fieldLabel}>WEATHER</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {WEATHERS.map(({ id, emoji, label }) => {
-              const selected = weather === id;
-              return (
-                <TouchableOpacity key={id} onPress={() => setWeather(selected ? null : id)}
-                  style={[s.weatherChip, selected && s.weatherChipActive]}>
-                  <Text style={{ fontSize: 13 }}>{emoji}</Text>
-                  <Text style={[s.weatherText, selected && s.weatherTextActive]}>{label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+        {/* ── Weather Chips ── Deleted */}
 
         {/* ── Body Context (simplified — text only for now) ── */}
         <View style={s.section}>
@@ -509,7 +532,7 @@ const s = StyleSheet.create({
     textAlignVertical: "top",
   },
   photoPicker: {
-    width: "100%", height: 80, borderWidth: 1.5, borderStyle: "dashed", borderColor: C.light,
+    width: "100%", height: 280, borderWidth: 1.5, borderStyle: "dashed", borderColor: C.light,
     borderRadius: 12, alignItems: "center", justifyContent: "center", overflow: "hidden",
   },
   chip: {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, TouchableOpacity, Image, FlatList, Modal,
-  TextInput, ScrollView, Alert, ActivityIndicator, StyleSheet,
+  TextInput, ScrollView, Alert, ActivityIndicator, StyleSheet, RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
@@ -22,6 +22,7 @@ type SortKey = "wear_rate" | "last_worn" | "feel";
 interface ClosetItem {
   id: string; name: string; category: string; wornCount: number;
   lastWorn: string; feel: Feel; flagType: FlagType; photo_url?: string;
+  cropped_photo_url?: string;  // add this
   systemNote?: string; avg_feel?: number; wear_count?: number;
   last_worn?: string; brand?: string; color?: string; purchase_price?: number;
 }
@@ -69,6 +70,7 @@ function mapDbItem(row: any): ClosetItem {
     lastWorn: lastWornDisplay, feel, flagType, photo_url: row.photo_url,
     avg_feel: row.avg_feel, wear_count: row.wear_count, last_worn: row.last_worn,
     brand: row.brand, color: row.color, purchase_price: row.purchase_price,
+    cropped_photo_url: row.cropped_photo_url || undefined,
   };
 }
 
@@ -83,6 +85,7 @@ export default function ClosetScreen() {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<ClosetItem | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchItems = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -90,7 +93,7 @@ export default function ClosetScreen() {
 
     let query = supabase
       .from("closet_items")
-      .select("id, name, category, wear_count, last_worn, avg_feel, photo_url, purchase_price, brand, color")
+      .select("id, name, category, wear_count, last_worn, avg_feel, photo_url, cropped_photo_url, purchase_price, brand, color")
       .eq("user_id", user.id)
       .eq("status", "active");
 
@@ -112,6 +115,12 @@ export default function ClosetScreen() {
   }, [selectedCategory, sortBy]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  async function onRefresh() {
+    setRefreshing(true);
+    await fetchItems();
+    setRefreshing(false);
+  }
 
   async function openSheet(item: ClosetItem) {
     setSelectedItem(item);
@@ -146,8 +155,8 @@ export default function ClosetScreen() {
   const renderItem = ({ item }: { item: ClosetItem }) => (
     <TouchableOpacity onPress={() => openSheet(item)} activeOpacity={0.7} style={s.card}>
       <View style={s.thumb}>
-        {item.photo_url ? (
-          <Image source={{ uri: item.photo_url }} style={s.thumbImage} />
+      {(item.cropped_photo_url || item.photo_url) ? (
+          <Image source={{ uri: item.cropped_photo_url || item.photo_url }} style={s.thumbImage} />
         ) : (
           <View style={[s.thumbImage, { backgroundColor: "#e8e0d4" }]} />
         )}
@@ -185,52 +194,61 @@ export default function ClosetScreen() {
         </View>
       </View>
 
-      {/* Category chips */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow}>
-        {["All", ...categories].map(chip => {
-          const active = chip === selectedCategory;
-          return (
-            <TouchableOpacity key={chip} onPress={() => setSelectedCategory(chip)}
-              style={[s.chip, active && s.chipActive]}>
-              <Text style={[s.chipText, active && s.chipTextActive]}>{chip}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+    
 
-      {/* Sort bar */}
-      <View style={s.sortBar}>
-        <Text style={s.sortLabel}>SORT BY</Text>
-        {(["wear_rate", "last_worn", "feel"] as SortKey[]).map(key => {
-          const active = sortBy === key;
-          const label = key === "wear_rate" ? "Wear rate" : key === "last_worn" ? "Last worn" : "Feel";
-          return (
-            <TouchableOpacity key={key} onPress={() => setSortBy(key)}>
-              <Text style={[s.sortOption, active && s.sortOptionActive]}>{label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* Grid */}
+      {/* Sort bar + Grid */}
       {isLoading ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
           <ActivityIndicator size="large" color={C.mintText} />
         </View>
-      ) : items.length === 0 ? (
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", padding: 48 }}>
-          <Text style={{ fontSize: 18, fontWeight: "300", color: C.black }}>Your closet is empty.</Text>
-          <Text style={{ fontSize: 11, fontWeight: "300", color: C.mid, marginTop: 8 }}>Tap + Add to add your first item.</Text>
-        </View>
       ) : (
-        <FlatList
+      <FlatList
           data={items}
           renderItem={renderItem}
           keyExtractor={i => i.id}
           numColumns={2}
-          columnWrapperStyle={{ gap: 12, paddingHorizontal: 16 }}
-          contentContainerStyle={{ gap: 12, paddingTop: 16, paddingBottom: 100 }}
+          columnWrapperStyle={items.length > 0 ? { gap: 12, paddingHorizontal: 16 } : undefined}
+          contentContainerStyle={items.length === 0 
+            ? { flex: 1, justifyContent: "center", alignItems: "center", padding: 48 }
+            : { gap: 12, paddingTop: 0, paddingBottom: 100 }}
           showsVerticalScrollIndicator={false}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          ListHeaderComponent={
+            <>
+              <View style={s.categoryRow}>
+                {["All", ...categories].map(cat => {
+                  const active = selectedCategory === cat;
+                  return (
+                    <TouchableOpacity key={cat} onPress={() => setSelectedCategory(cat)}
+                      style={[s.categoryChip, active && s.categoryChipActive]}>
+                      <Text style={[s.categoryText, active && s.categoryTextActive]}>
+                        {cat.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={s.sortBar}>
+                <Text style={s.sortLabel}>SORT BY</Text>
+                {(["wear_rate", "last_worn", "feel"] as SortKey[]).map(key => {
+                  const active = sortBy === key;
+                  const label = key === "wear_rate" ? "Wear rate" : key === "last_worn" ? "Last worn" : "Feel";
+                  return (
+                    <TouchableOpacity key={key} onPress={() => setSortBy(key)}>
+                      <Text style={[s.sortOption, active && s.sortOptionActive]}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          }
+          ListEmptyComponent={
+            <View style={{ alignItems: "center" }}>
+              <Text style={{ fontSize: 18, fontWeight: "300", color: C.black }}>Your closet is empty.</Text>
+              <Text style={{ fontSize: 11, fontWeight: "300", color: C.mid, marginTop: 8 }}>Tap + Add to add your first item.</Text>
+            </View>
+          }
         />
       )}
 
@@ -268,9 +286,9 @@ function DetailSheet({ item, isOpen, onClose, onEdit, onArchive }: {
         <TouchableOpacity style={s.sheetBackdrop} onPress={onClose} activeOpacity={1} />
         <View style={s.sheetContent}>
           <View style={s.sheetHandle} />
-          {item.photo_url && (
-            <Image source={{ uri: item.photo_url }} style={{ width: "100%", height: 200 }} resizeMode="cover" />
-          )}
+          {(item.cropped_photo_url || item.photo_url) && (
+      <Image source={{ uri: item.cropped_photo_url || item.photo_url }} style={{ width: "100%", height: 280 }} resizeMode="cover" />
+    )}
           <View style={{ padding: 20, paddingBottom: 0 }}>
             <Text style={s.sheetCategory}>{item.category}</Text>
             <Text style={s.sheetName}>{item.name}</Text>
@@ -554,4 +572,12 @@ const s = StyleSheet.create({
     borderColor: C.light, borderRadius: 12, backgroundColor: C.warmWhite,
     alignItems: "center", justifyContent: "center", marginBottom: 16, overflow: "hidden",
   },
+categoryRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
+categoryChip: {
+  paddingHorizontal: 16, paddingVertical: 8, borderRadius: 100,
+  borderWidth: 1, borderColor: C.light, backgroundColor: C.white,
+},
+categoryChipActive: { backgroundColor: C.black, borderColor: C.black },
+categoryText: { fontSize: 11, fontWeight: "300", letterSpacing: 0.8, color: C.brown },
+categoryTextActive: { color: C.white },
 });
