@@ -19,9 +19,9 @@ Analyze the outfit photo and provide THREE things:
 ## 1. ITEM IDENTIFICATION WITH BOUNDING BOXES
 Identify EVERY distinct CLOTHING item the person is wearing and provide a bounding box for each.
 
-INCLUDE: shirts, pants, shorts, jackets, coats, vests, sweaters, hoodies, dresses, skirts, shoes, sneakers, boots, hats, scarves, belts, bags, jewelry, watches, sunglasses.
+INCLUDE: shirts, pants, shorts, jackets, coats, vests, sweaters, hoodies, dresses, skirts, shoes, sneakers, boots, hats, scarves, belts, bags, sunglasses.
 
-EXCLUDE: phones, cameras, electronics, furniture, backgrounds, mirrors, other people, body parts, grooming items.
+EXCLUDE: phones, cameras, electronics, furniture, backgrounds, mirrors, other people, body parts, grooming items, jewelry, watches, rings, necklaces, bracelets, earrings.
 
 For each item, return:
 - name: a short, natural name (e.g. "Navy blazer", "White sneakers", "Black skinny jeans")

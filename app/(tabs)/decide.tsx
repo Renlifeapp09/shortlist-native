@@ -127,11 +127,25 @@ export default function DecideScreen() {
           itemName: itemName,
           price: price,
           photo: photo || "",
-          similarItems: JSON.stringify(
-            (verdict.similar_items || []).map((name: string, i: number) => ({
-              id: String(i), name,
-            }))
-          ),
+          similarItems: await (async () => {
+            const names = verdict.similar_items || [];
+            if (names.length === 0) return "[]";
+            const { data: matchedItems } = await supabase
+              .from("closet_items")
+              .select("id, name, wear_count, avg_feel, photo_url, cropped_photo_url")
+              .eq("user_id", session.user.id)
+              .eq("status", "active")
+              .in("name", names);
+            return JSON.stringify(
+              (matchedItems || []).map((item: any) => ({
+                id: item.id,
+                name: item.name,
+                wearCount: item.wear_count || 0,
+                feel: item.avg_feel ? (item.avg_feel >= 4 ? "Feels good" : item.avg_feel >= 3 ? "Feels ok" : "Feels off") : undefined,
+                photo_url: item.cropped_photo_url || item.photo_url || null,
+              }))
+            );
+          })(),
         },
       });
     } catch (err) {
@@ -177,7 +191,7 @@ export default function DecideScreen() {
 
           {/* Item Type */}
           <View>
-            <Text style={s.fieldLabel}>ITEM TYPE</Text>
+            <Text style={s.fieldLabel}>BRAND & ITEM NAME</Text>
             <TextInput value={itemName} onChangeText={setItemName}
               placeholder="e.g. Navy blazer" placeholderTextColor="#bbb"
               style={s.textInput} />

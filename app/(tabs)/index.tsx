@@ -336,7 +336,7 @@ export default function DashboardScreen() {
 
           {/* ── Money Saved + Streak side by side ── */}
           <View style={s.grid2}>
-            <View style={[s.card, { backgroundColor: C.mint, borderColor: C.mintDeep, marginBottom: 0 }]}>
+            <View style={[s.card,  { flex: 1, backgroundColor: C.mint, borderColor: C.mintDeep, marginBottom: 0 }]}>
               <Text style={[s.eyebrow, { color: C.mintText }]}>SAVED</Text>
               <Text style={s.savedAmount}>${data.moneySaved}</Text>
               <Text style={s.savedSub}>
@@ -345,7 +345,7 @@ export default function DashboardScreen() {
                   : "No skipped purchases yet"}
               </Text>
             </View>
-            <View style={[s.card, { backgroundColor: C.black, borderColor: "#333", marginBottom: 0 }]}>
+            <View style={[s.card, { flex: 1, backgroundColor: C.black, borderColor: "#333", marginBottom: 0 }]}>
               <Text style={[s.eyebrow, { color: C.mintDeep }]}>STREAK</Text>
               <Text style={s.streakNum}>{data.streakDays}</Text>
               <Text style={s.streakSub}>

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Animated, Image,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, Animated, Image, Alert,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../../lib/supabase";
 
 // ── Colors ────────────────────────────────────────────────────
 const C = {
@@ -17,8 +18,8 @@ function verdictTheme(verdict: string) {
   if (verdict === "skip") return {
     bg: "#f5ede8", border: "#e8d5c8", eyebrow: "#8b5e3c", word: "#3d1f0a", label: "Skip it.",
   };
-  if (verdict === "wear") return {
-    bg: C.mint, border: C.mintDeep, eyebrow: C.mintText, word: C.mintText, label: "Wear it.",
+  if (verdict === "buy") return {
+    bg: C.mint, border: C.mintDeep, eyebrow: C.mintText, word: C.mintText, label: "Buy it.",
   };
   // rent
   return {
@@ -26,8 +27,27 @@ function verdictTheme(verdict: string) {
   };
 }
 
+// ── Decision button config ────────────────────────────────────
+function getDecisionButtons(aiVerdict: string) {
+  // Always show all three, but order them with the AI-recommended one first
+  const buttons = [
+    { key: "buy", label: "I'll buy it", icon: "💳" },
+    { key: "rent", label: "I'll rent it", icon: "🔄" },
+    { key: "skip", label: "I'll skip it", icon: "✕" },
+  ];
+
+  // Move AI-recommended option to the top
+  const aiIndex = buttons.findIndex(b => b.key === aiVerdict);
+  if (aiIndex > 0) {
+    const [recommended] = buttons.splice(aiIndex, 1);
+    buttons.unshift(recommended);
+  }
+
+  return buttons;
+}
+
 // ── Similar Item type ─────────────────────────────────────────
-interface SimilarItem { id: string; name: string; wearCount?: number; feel?: string }
+interface SimilarItem { id: string; name: string; wearCount?: number; feel?: string; photo_url?: string }
 
 // ═══════════════════════════════════════════════════════════════
 // DECIDE VERDICT SCREEN
@@ -51,19 +71,49 @@ export default function DecideVerdictScreen() {
   let similarItems: SimilarItem[] = [];
   try { similarItems = JSON.parse(params.similarItems || "[]"); } catch {}
 
+  const [isSaving, setIsSaving] = useState(false);
+  const decisionButtons = getDecisionButtons(verdict);
+
   // Animated confidence bar
-  const barWidth = React.useRef(new Animated.Value(0)).current;
+  const barWidth = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(barWidth, {
       toValue: confidence, duration: 800, useNativeDriver: false,
     }).start();
   }, [confidence]);
 
-  // Action labels
-  let primaryLabel = "", secondaryLabel = "";
-  if (verdict === "skip") { primaryLabel = `Skip & save $${price}`; secondaryLabel = "Buy anyway"; }
-  else if (verdict === "wear") { primaryLabel = "Add to wishlist"; secondaryLabel = "Decide later"; }
-  else { primaryLabel = "Find rental options"; secondaryLabel = "Buy anyway"; }
+  // ── Save decision and navigate ──
+  async function handleDecision(userChoice: string) {
+    setIsSaving(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        Alert.alert("Error", "Not signed in.");
+        setIsSaving(false);
+        return;
+      }
+
+      const agreedWithAi = userChoice === verdict;
+
+      await supabase.from("purchase_decisions").insert({
+        user_id: session.user.id,
+        item_name: itemName,
+        price: price,
+        ai_verdict: verdict,
+        user_decision: userChoice,
+        agreed_with_ai: agreedWithAi,
+        photo_url: photoUri,
+      });
+
+      console.log(`Decision saved: AI said "${verdict}", user chose "${userChoice}", agreed: ${agreedWithAi}`);
+    } catch (err) {
+      console.error("Failed to save decision:", err);
+    }
+
+    setIsSaving(false);
+    router.replace("/(tabs)");
+  }
 
   return (
     <SafeAreaView style={s.container} edges={["top"]}>
@@ -76,26 +126,24 @@ export default function DecideVerdictScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 160 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 220 }} showsVerticalScrollIndicator={false}>
         {/* Item Thumbnail */}
-       {/* Item Thumbnail */}
-       <View style={[s.itemThumb, { marginHorizontal: 24, marginTop: 24 }]}>
-        {photoUri && (
-          <Image source={{ uri: photoUri }}
-          style={StyleSheet.absoluteFillObject}
-          resizeMode="cover" />
-      )}
-      <View style={s.thumbOverlay}>
-        <Text style={s.thumbName}>{itemName}</Text>
-        <Text style={s.thumbPrice}>${price}</Text>  
-      </View>
-    </View>
+        <View style={[s.itemThumb, { marginHorizontal: 24, marginTop: 24 }]}>
+          {photoUri && (
+            <Image source={{ uri: photoUri }}
+              style={StyleSheet.absoluteFillObject}
+              resizeMode="cover" />
+          )}
+          <View style={s.thumbOverlay}>
+            <Text style={s.thumbName}>{itemName}</Text>
+            <Text style={s.thumbPrice}>${price}</Text>
+          </View>
+        </View>
 
         {/* Verdict Card */}
         <View style={[s.verdictCard, { backgroundColor: theme.bg, borderColor: theme.border, marginHorizontal: 24, marginTop: 20 }]}>
           <Text style={[s.verdictEyebrow, { color: theme.eyebrow }]}>OUR RECOMMENDATION</Text>
           <Text style={[s.verdictWord, { color: theme.word }]}>{theme.label}</Text>
-          {/* Decorative rule */}
           <View style={[s.rule, { backgroundColor: theme.word }]} />
           <Text style={[s.verdictReason, { color: theme.word }]}>{reason}</Text>
         </View>
@@ -117,19 +165,6 @@ export default function DecideVerdictScreen() {
           <Text style={s.confidenceSub}>{confidenceSub}</Text>
         </View>
 
-        {/* Savings Callout (skip only) */}
-        {verdict === "skip" && (
-          <View style={s.savingsCard}>
-            <View>
-              <Text style={s.savingsEyebrow}>IF YOU SKIP</Text>
-              <Text style={s.savingsAmount}>${price}</Text>
-            </View>
-            <TouchableOpacity style={s.savingsBtn}>
-              <Text style={s.savingsBtnText}>ADD TO SAVINGS</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
         {/* Similar Items */}
         {similarItems.length > 0 && (
           <View style={{ marginTop: 20 }}>
@@ -141,7 +176,10 @@ export default function DecideVerdictScreen() {
                 const bg = bgColors[Number(item.id) % bgColors.length];
                 return (
                   <View key={item.id} style={{ width: 110 }}>
-                    <View style={[s.similarThumb, { backgroundColor: bg }]}>
+                    <View style={[s.similarThumb, { backgroundColor: bg, overflow: "hidden" }]}>
+                      {item.photo_url && (
+                        <Image source={{ uri: item.photo_url }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+                        )}
                       {item.wearCount !== undefined && (
                         <View style={s.wearBadge}>
                           <Text style={s.wearBadgeText}>worn {item.wearCount}×</Text>
@@ -158,14 +196,32 @@ export default function DecideVerdictScreen() {
         )}
       </ScrollView>
 
-      {/* Action Row */}
+      {/* ── Decision Buttons ── */}
       <View style={s.actionRow}>
-        <TouchableOpacity onPress={() => router.replace("/(tabs)")} style={s.primaryBtn}>
-          <Text style={s.primaryBtnText}>{primaryLabel.toUpperCase()}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.replace("/(tabs)")} style={s.secondaryBtn}>
-          <Text style={s.secondaryBtnText}>{secondaryLabel.toUpperCase()}</Text>
-        </TouchableOpacity>
+        <Text style={s.actionPrompt}>What do you think?</Text>
+
+        {decisionButtons.map((btn, i) => {
+          const isRecommended = btn.key === verdict;
+          const isFirst = i === 0;
+
+          return (
+            <TouchableOpacity
+              key={btn.key}
+              onPress={() => handleDecision(btn.key)}
+              disabled={isSaving}
+              activeOpacity={0.7}
+              style={[
+                isFirst ? s.primaryBtn : s.secondaryBtn,
+                isSaving && { opacity: 0.5 },
+              ]}
+            >
+              <Text style={isFirst ? s.primaryBtnText : s.secondaryBtnText}>
+                {btn.label.toUpperCase()}
+                {isRecommended && !isFirst ? "  ← RECOMMENDED" : ""}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </SafeAreaView>
   );
@@ -205,14 +261,6 @@ const s = StyleSheet.create({
   barTrack: { height: 6, backgroundColor: C.light, borderRadius: 100, overflow: "hidden", marginBottom: 8 },
   barFill: { height: "100%", backgroundColor: C.black, borderRadius: 100 },
   confidenceSub: { fontSize: 11, fontWeight: "300", lineHeight: 16, color: C.brown },
-  savingsCard: {
-    marginHorizontal: 24, marginTop: 20, backgroundColor: C.mint, borderRadius: 16,
-    padding: 18, flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-  },
-  savingsEyebrow: { fontSize: 9, fontWeight: "400", letterSpacing: 2, color: C.mintText, marginBottom: 4 },
-  savingsAmount: { fontSize: 28, fontWeight: "300", color: C.brown },
-  savingsBtn: { backgroundColor: C.mintText, borderRadius: 100, paddingHorizontal: 16, paddingVertical: 8 },
-  savingsBtnText: { fontSize: 10, fontWeight: "400", letterSpacing: 0.8, color: "#fff" },
   sectionLabel: { fontSize: 9, fontWeight: "400", letterSpacing: 2, textTransform: "uppercase", color: C.brown, marginBottom: 12 },
   similarThumb: { width: 110, height: 130, borderRadius: 12, overflow: "hidden" },
   wearBadge: {
@@ -222,19 +270,23 @@ const s = StyleSheet.create({
   wearBadgeText: { fontSize: 8, fontWeight: "400", color: "#fff" },
   similarName: { fontSize: 12, fontWeight: "400", color: C.black, marginTop: 8 },
   similarFeel: { fontSize: 10, fontWeight: "300", color: C.brown, marginTop: 2 },
+  // Action row
   actionRow: {
     position: "absolute", bottom: 0, left: 0, right: 0,
     backgroundColor: C.white, borderTopWidth: 1, borderTopColor: C.light,
-    paddingHorizontal: 24, paddingTop: 16, paddingBottom: 34, gap: 12,
+    paddingHorizontal: 24, paddingTop: 14, paddingBottom: 34, gap: 10,
+  },
+  actionPrompt: {
+    fontSize: 13, fontWeight: "400", color: C.black, textAlign: "center", marginBottom: 4,
   },
   primaryBtn: {
-    width: "100%", borderRadius: 100, paddingVertical: 18,
+    width: "100%", borderRadius: 100, paddingVertical: 16,
     backgroundColor: C.black, alignItems: "center",
   },
-  primaryBtnText: { color: C.white, fontSize: 12, fontWeight: "400", letterSpacing: 2 },
+  primaryBtnText: { color: C.white, fontSize: 11, fontWeight: "400", letterSpacing: 1.5 },
   secondaryBtn: {
-    width: "100%", borderRadius: 100, paddingVertical: 14,
+    width: "100%", borderRadius: 100, paddingVertical: 13,
     borderWidth: 1, borderColor: C.light, alignItems: "center",
   },
-  secondaryBtnText: { color: C.brown, fontSize: 11, fontWeight: "300", letterSpacing: 1.5 },
+  secondaryBtnText: { color: C.brown, fontSize: 10, fontWeight: "300", letterSpacing: 1.2 },
 });

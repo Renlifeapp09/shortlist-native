@@ -36,8 +36,8 @@ interface OutfitSnapshot {
 interface InsightsData {
   logCount: number;
   narrative: string;
-  mostWorn: ClosetItem;
-  leastWorn: ClosetItem;
+  top3Most: ClosetItem [];
+  top3Least: ClosetItem [];
   outfits: OutfitSnapshot[];
   avgCohesion: number | null;
   avgHarmony: number | null;
@@ -248,20 +248,11 @@ export default function InsightsScreen() {
     // ── Closet items ──
     const { data: items } = await supabase
       .from("closet_items")
-      .select("id, name, category, wear_count, avg_feel, last_worn, photo_url")
+      .select("id, name, category, wear_count, avg_feel, last_worn, photo_url, cropped_photo_url")
       .eq("user_id", userId)
       .eq("status", "active");
 
     const allItems = items || [];
-
-    // ── Most & least worn ──
-    const sorted = [...allItems].sort((a, b) => (b.wear_count || 0) - (a.wear_count || 0));
-    const mostWorn = sorted[0]
-      ? { name: sorted[0].name, sub: sorted[0].avg_feel ? `avg feel ${sorted[0].avg_feel}/5` : "no feel data yet", wornCount: sorted[0].wear_count || 0, bgColor: "#2a2a2a", photo_url: sorted[0].photo_url || undefined }
-      : { name: "No items yet", sub: "", wornCount: 0, bgColor: "#e8e0d4" };
-    const leastWorn = sorted.length > 0
-      ? { name: sorted[sorted.length - 1].name, sub: sorted[sorted.length - 1].wear_count === 0 ? "never worn" : `worn ${sorted[sorted.length - 1].wear_count} time(s)`, wornCount: sorted[sorted.length - 1].wear_count || 0, bgColor: "#e8e0d4", photo_url: sorted[sorted.length - 1].photo_url || undefined }
-      : { name: "No items yet", sub: "", wornCount: 0, bgColor: "#e8e0d4" };
 
     // ── Outfit-level aggregations ──
     const withCohesion = outfits.filter(o => o.style_cohesion != null);
@@ -305,6 +296,27 @@ export default function InsightsScreen() {
       .sort((a, b) => b.score - a.score);
     const bestOutfit = scoredOutfits[0] || null;
 
+    // ── Top 3 most & least worn ──
+    const sorted = [...allItems].sort((a, b) => (b.wear_count || 0) - (a.wear_count || 0));
+    
+    const top3Most: ClosetItem[] = sorted.slice(0, 3).map(i => ({
+      name: i.name,
+      sub: i.avg_feel ? `avg feel ${i.avg_feel}/5` : "no feel data yet",
+      wornCount: i.wear_count || 0,
+      bgColor: "#2a2a2a",
+      photo_url: (i as any).cropped_photo_url || i.photo_url || undefined,
+    }));
+
+    const top3Least: ClosetItem[] = sorted.length > 0
+      ? sorted.slice(-3).reverse().map(i => ({
+          name: i.name,
+          sub: i.wear_count === 0 ? "never worn" : `worn ${i.wear_count} time(s)`,
+          wornCount: i.wear_count || 0,
+          bgColor: "#e8e0d4",
+          photo_url: (i as any).cropped_photo_url || i.photo_url || undefined,
+        }))
+      : [];
+
     // ── AI narrative (10+ outfits) ──
     let narrative = "Keep logging — patterns start to emerge after about 10 outfits.";
     if ((outfitCount || 0) >= 10) {
@@ -317,7 +329,7 @@ export default function InsightsScreen() {
     }
 
     setData({
-      logCount: outfitCount || 0, narrative, mostWorn, leastWorn,
+      logCount: outfitCount || 0, narrative, top3Most, top3Least,
       outfits, avgCohesion, avgHarmony, formalityBreakdown, topTags, bestOutfit,
     });
     setIsLoading(false);
@@ -473,30 +485,63 @@ export default function InsightsScreen() {
           )}
 
           {/* ── Outfit Style Scores (unlocks at 3) — below Best Outfit ── */}
-          {logCount >= 3 && data.avgCohesion != null && data.avgHarmony != null && (
+      
+{/* ── Top 3 Most Worn Old ── */}
+{/* ── Top 3 Most Worn ── */}
+{logCount >= 3 && (data?.top3Most?.length ?? 0) > 0 && (
             <>
               <View style={{ paddingTop: 24, paddingBottom: 8 }}>
-                <SectionHeader>OUTFIT STYLE SCORES</SectionHeader>
-                <View style={{ flexDirection: "row", paddingHorizontal: 28, gap: 16 }}>
-                  <ScoreRing score={data.avgCohesion} label="Cohesion" />
-                  <ScoreRing score={data.avgHarmony} label="Color harmony" />
-                </View>
+                <SectionHeader>TOP 3 MOST WORN</SectionHeader>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ paddingHorizontal: 28, gap: 10 }}>
+                  {data?.top3Most.map((item: ClosetItem, i: number) => (
+                    <View key={i} style={{ width: 150, borderWidth: 0.5, borderColor: C.light, borderRadius: 14, overflow: "hidden" }}>
+                      <View style={{ height: 180, backgroundColor: item.bgColor }}>
+                        {item.photo_url && (
+                          <Image source={{ uri: item.photo_url }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+                        )}
+                        <View style={{ position: "absolute", top: 6, left: 6, backgroundColor: "rgba(0,0,0,0.5)", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100 }}>
+                          <Text style={{ fontSize: 9, fontWeight: "400", color: "#fff" }}>{item.wornCount}×</Text>
+                        </View>
+                      </View>
+                      <View style={{ padding: 10, backgroundColor: C.warmWhite }}>
+                        <Text style={{ fontSize: 11, fontWeight: "400", color: C.black, lineHeight: 14 }} numberOfLines={1}>{item.name}</Text>
+                        <Text style={{ fontSize: 9, fontWeight: "300", color: C.mid, marginTop: 3 }}>{item.sub}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
               </View>
               <Divider />
             </>
           )}
 
-          {/* ── Most & Least Worn (unlocks at 3) ── */}
-          {logCount >= 3 && (
+          {/* ── Top 3 Least Worn ── */}
+          {logCount >= 3 && (data?.top3Least?.length ?? 0) > 0 && (
             <View style={{ paddingTop: 24, paddingBottom: 8 }}>
-              <SectionHeader>MOST & LEAST WORN</SectionHeader>
-              <View style={{ flexDirection: "row", gap: 10, paddingHorizontal: 28 }}>
-                <View style={{ flex: 1 }}><WornCard item={data.mostWorn} kind="most" /></View>
-                <View style={{ flex: 1 }}><WornCard item={data.leastWorn} kind="least" /></View>
-              </View>
+              <SectionHeader>TOP 3 LEAST WORN</SectionHeader>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 28, gap: 10 }}>
+                {data?.top3Least?.map((item: ClosetItem, i: number) => (
+                  <View key={i} style={{ width: 150, borderWidth: 0.5, borderColor: C.light, borderRadius: 14, overflow: "hidden" }}>
+                    <View style={{ height: 180, backgroundColor: item.bgColor }}>
+                      {item.photo_url && (
+                        <Image source={{ uri: item.photo_url }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+                      )}
+                      <View style={{ position: "absolute", top: 6, left: 6, backgroundColor: "rgba(0,0,0,0.5)", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100 }}>
+                        <Text style={{ fontSize: 9, fontWeight: "400", color: "#fff" }}>{item.wornCount}×</Text>
+                      </View>
+                    </View>
+                    <View style={{ padding: 10, backgroundColor: C.warmWhite }}>
+                      <Text style={{ fontSize: 11, fontWeight: "400", color: C.black, lineHeight: 14 }} numberOfLines={1}>{item.name}</Text>
+                      <Text style={{ fontSize: 9, fontWeight: "300", color: C.mid, marginTop: 3 }}>{item.sub}</Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
             </View>
           )}
-
+          
           {/* ── Empty state for new users ── */}
           {logCount < 3 && (
             <View style={{ padding: 48, alignItems: "center" }}>
